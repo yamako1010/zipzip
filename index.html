@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
+    <title>MonoZip Web</title>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-header">
+        <h1 class="logo">ZIPGYUGYU</h1>
+      </header>
+
+      <main class="content">
+        <form id="zip-form" class="zip-form" autocomplete="off">
+          <section class="dropzone-wrapper">
+            <label for="file-input" class="dropzone" id="dropzone">
+              <input id="file-input" type="file" name="files" multiple />
+              <span class="dropzone-icon">&#x21E7;</span>
+              <span class="dropzone-text">
+                ファイルをここにドラッグ＆ドロップ<br />
+                またはクリックして選択
+              </span>
+            </label>
+            <ul id="file-list" class="file-list">
+              <li class="file-list-empty">ファイルが選択されていません。</li>
+            </ul>
+          </section>
+
+          <section class="zipname-wrapper">
+            <label for="zipname">ZIPファイル名</label>
+            <input
+              id="zipname"
+              type="text"
+              name="zipname"
+              placeholder="ZIPファイル名を入力（例：MyFiles）"
+              required
+            />
+          </section>
+
+          <section class="password-wrapper">
+            <div class="password-field">
+              <label for="password">パスワード</label>
+              <input id="password" type="text" name="password" required />
+            </div>
+            <div class="password-field">
+              <label for="confirm-password">パスワード（確認）</label>
+              <input id="confirm-password" type="text" required />
+            </div>
+            <p id="password-hint" class="password-hint">※ 8文字以上を推奨します。</p>
+            <p id="password-error" class="password-error" aria-live="polite"></p>
+          </section>
+
+          <div class="button-group">
+            <button type="submit" class="zip-button" id="zip-button">ZIP作成</button>
+            <button type="reset" class="clear-btn" id="clear-button">クリア</button>
+          </div>
+
+          <section class="progress-wrapper">
+            <div class="progress-label">進行状況</div>
+            <div class="progress-bar" id="progress-bar">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <ul class="log" id="log"></ul>
+          </section>
+        </form>
+      </main>
+    </div>
+
+    <script>
+      const csrfTokenElement = document.querySelector('meta[name="csrf-token"]');
+      const csrfToken = csrfTokenElement ? csrfTokenElement.getAttribute("content") : "";
+      const dropzone = document.getElementById("dropzone");
+      const fileInput = document.getElementById("file-input");
+      const fileList = document.getElementById("file-list");
+      const zipForm = document.getElementById("zip-form");
+      const zipButton = document.getElementById("zip-button");
+      const passwordInput = document.getElementById("password");
+      const confirmPasswordInput = document.getElementById("confirm-password");
+      const passwordError = document.getElementById("password-error");
+      const zipNameInput = document.getElementById("zipname");
+      const progressBar = document.getElementById("progress-bar");
+      const progressFill = document.getElementById("progress-fill");
+      const logList = document.getElementById("log");
+
+      const filesMap = new Map();
+
+      const addLog = (message, tone = "info") => {
+        const item = document.createElement("li");
+        item.textContent = message;
+        item.classList.add(`log-${tone}`);
+        logList.appendChild(item);
+        logList.scrollTop = logList.scrollHeight;
+      };
+
+      const clearLogs = () => {
+        logList.innerHTML = "";
+      };
+
+      const updateFileList = () => {
+        fileList.innerHTML = "";
+        if (filesMap.size === 0) {
+          const empty = document.createElement("li");
+          empty.className = "file-list-empty";
+          empty.textContent = "ファイルが選択されていません。";
+          fileList.appendChild(empty);
+          return;
+        }
+
+        filesMap.forEach((file) => {
+          const item = document.createElement("li");
+          const sizeKB = Math.max(file.size / 1024, 0.1).toFixed(1);
+          item.innerHTML = `
+            <span class="file-name">${file.name}</span>
+            <span class="file-size">${sizeKB} KB</span>
+          `;
+          fileList.appendChild(item);
+        });
+      };
+
+      const addFiles = (fileListLike) => {
+        Array.from(fileListLike).forEach((file) => {
+          if (!(file instanceof File)) {
+            return;
+          }
+          const key = `${file.name}_${file.size}_${file.lastModified}`;
+          filesMap.set(key, file);
+        });
+        updateFileList();
+      };
+
+      const validatePasswords = () => {
+        const password = passwordInput.value.trim();
+        const confirm = confirmPasswordInput.value.trim();
+
+        if (!password && !confirm) {
+          passwordError.textContent = "";
+          return false;
+        }
+
+        if (password !== confirm) {
+          passwordError.textContent = "パスワードが一致しません。";
+          return false;
+        }
+
+        passwordError.textContent = "";
+        return true;
+      };
+
+      const resetProgress = () => {
+        progressFill.style.width = "0%";
+        progressFill.classList.remove("is-active");
+        progressBar.classList.remove("is-active");
+      };
+
+      const setProgress = (value) => {
+        progressFill.style.width = `${value}%`;
+      };
+
+      const startProgress = () => {
+        progressFill.classList.add("is-active");
+        progressBar.classList.add("is-active");
+        setProgress(10);
+      };
+
+      confirmPasswordInput.addEventListener("input", validatePasswords);
+      passwordInput.addEventListener("input", validatePasswords);
+
+      zipForm.addEventListener("reset", () => {
+        filesMap.clear();
+        updateFileList();
+        fileInput.value = "";
+        passwordError.textContent = "";
+        clearLogs();
+        resetProgress();
+        zipButton.disabled = false;
+        zipButton.classList.remove("is-busy");
+      });
+
+      dropzone.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        dropzone.classList.add("dragover");
+      });
+
+      ["dragleave", "dragend"].forEach((eventName) => {
+        dropzone.addEventListener(eventName, () => {
+          dropzone.classList.remove("dragover");
+        });
+      });
+
+      dropzone.addEventListener("drop", (event) => {
+        event.preventDefault();
+        dropzone.classList.remove("dragover");
+        if (event.dataTransfer?.files?.length) {
+          addFiles(event.dataTransfer.files);
+        }
+      });
+
+      fileInput.addEventListener("change", (event) => {
+        if (event.target.files?.length) {
+          addFiles(event.target.files);
+          event.target.value = "";
+        }
+      });
+
+      zipForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        clearLogs();
+        resetProgress();
+
+        if (filesMap.size === 0) {
+          addLog("ファイルを選択してください。", "warn");
+          return;
+        }
+
+        if (!validatePasswords()) {
+          addLog("パスワードを確認してください。", "warn");
+          return;
+        }
+
+        const password = passwordInput.value.trim();
+        const zipName = zipNameInput.value.trim();
+        if (!password) {
+          passwordError.textContent = "パスワードを入力してください。";
+          addLog("パスワードを入力してください。", "warn");
+          return;
+        }
+        if (!zipName) {
+          addLog("ZIPファイル名を入力してください。", "warn");
+          return;
+        }
+
+        const formData = new FormData();
+        filesMap.forEach((file) => formData.append("files", file));
+        formData.append("password", password);
+        formData.append("zipname", zipName);
+
+        try {
+          zipButton.disabled = true;
+          zipButton.classList.add("is-busy");
+          startProgress();
+          addLog("ファイルを送信しています…");
+
+          const response = await fetch("/zip", {
+            method: "POST",
+            body: formData,
+            headers: {
+              "X-CSRFToken": csrfToken,
+            },
+            credentials: "same-origin",
+          });
+
+          if (!response.ok) {
+            setProgress(0);
+            const contentType = response.headers.get("Content-Type") || "";
+            if (contentType.includes("application/json")) {
+              const payload = await response.json();
+              throw new Error(payload.message || "ZIP作成に失敗しました。");
+            }
+            throw new Error("ZIP作成に失敗しました。");
+          }
+
+          setProgress(70);
+          addLog("暗号化ZIPを作成しました。ダウンロードを開始します…");
+
+          const blob = await response.blob();
+          const downloadUrl = window.URL.createObjectURL(blob);
+
+          let filename = "MonoZipEncrypted.zip";
+          const disposition = response.headers.get("Content-Disposition");
+          if (disposition) {
+            const match = disposition.match(/filename\*?=(?:UTF-8'')?["']?([^\"';\n]+)/);
+            if (match && match[1]) {
+              filename = decodeURIComponent(match[1]);
+            }
+          }
+
+          const anchor = document.createElement("a");
+          anchor.href = downloadUrl;
+          anchor.download = filename;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          window.URL.revokeObjectURL(downloadUrl);
+
+          setProgress(100);
+          addLog("ダウンロードが完了しました。", "success");
+        } catch (error) {
+          resetProgress();
+          passwordError.textContent = error.message || "不明なエラーが発生しました。";
+          addLog(error.message || "不明なエラーが発生しました。", "error");
+        } finally {
+          zipButton.disabled = false;
+          zipButton.classList.remove("is-busy");
+        }
+      });
+    </script>
+  </body>
+</html>
